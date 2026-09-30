@@ -27,10 +27,12 @@ from telegram.ext import (
 # НАСТРОЙКИ
 # =========================================================
 
-TOKEN = "8725490149:AAEt-HQdNMrAACe8m4-Ne6TerVQRWYroqSc"
-PROVIDER_TOKEN = "" # Токен платежного провайдера для Telegram Stars (оставьте пустым или укажите от BotFather)
+TOKEN = "token"
+PROVIDER_TOKEN = "" # Токен платежного провайдера для Telegram Stars
 
-START_BALANCE = 1000
+START_BALANCE = 5000
+
+OWNER_ID = 5984555148  # Замените на ваш числовой Telegram ID
 
 BET_WAIT_SECONDS = 10
 SPIN_SECONDS = 3
@@ -45,9 +47,9 @@ LOG_FILE = "roulette_log.json"
 TREASURIES_FILE = "treasuries.json"
 STATS_FILE = "stats.json"
 BONUS_FILE = "bonus_times.json"
-OWNER_ID = 5984555148  # замени на свой Telegram ID
 PROMOS_FILE = "promos.json"
 PROMO_USES_FILE = "promo_uses.json"
+HISTORY_FILE = "history.json"
 
 MSK_TZ = timezone(timedelta(hours=3))
 
@@ -116,85 +118,7 @@ user_stats = load_json(STATS_FILE, {})
 bonus_times = load_json(BONUS_FILE, {})
 promos = load_json(PROMOS_FILE, {})
 promo_uses = load_json(PROMO_USES_FILE, {})
-
-def save_promos():
-    save_json(PROMOS_FILE, promos)
-
-def save_promo_uses():
-    save_json(PROMO_USES_FILE, promo_uses)
-
-
-async def promo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-
-    parts = update.message.text.strip().split()
-
-    # Создание: Создать промокод #promo 10000 20
-    if len(parts) == 5 and parts[0].lower() == "создать" and parts[1].lower() == "промокод":
-        if update.effective_user.id != OWNER_ID:
-            await update.message.reply_text("❌ Создавать промокоды может только владелец.")
-            return
-
-        code = parts[2].lstrip("#").lower()
-
-        try:
-            reward = int(parts[3])
-            limit = int(parts[4])
-        except ValueError:
-            await update.message.reply_text("Формат: Создать промокод #promo 10000 20")
-            return
-
-        if not code or reward <= 0 or limit <= 0:
-            await update.message.reply_text("❌ Сумма и количество должны быть больше нуля.")
-            return
-
-        if code in promos:
-            await update.message.reply_text("❌ Такой промокод уже существует.")
-            return
-
-        promos[code] = {"reward": reward, "limit": limit, "used": 0}
-        promo_uses[code] = []
-        save_promos()
-        save_promo_uses()
-
-        await update.message.reply_text(
-            f"✅ Промокод #{code} создан: +{fmt(reward)} TON, активаций: {limit}."
-        )
-        return
-
-
-
-    # Активация: #promo
-    if len(parts) == 1 and parts[0].startswith("#"):
-        code = parts[0].lstrip("#").lower()
-        user_id = get_user(update.effective_user)
-
-        promo = promos.get(code)
-        if not promo:
-            await update.message.reply_text("❌ Промокод не найден.")
-            return
-
-        used_by = promo_uses.setdefault(code, [])
-        if user_id in used_by:
-            await update.message.reply_text("❌ Ты уже использовал этот промокод.")
-            return
-
-        if promo["used"] >= promo["limit"]:
-            await update.message.reply_text("❌ Лимит активаций исчерпан.")
-            return
-
-        balances[user_id] += promo["reward"]
-        promo["used"] += 1
-        used_by.append(user_id)
-
-        save_balances()
-        save_promos()
-        save_promo_uses()
-
-        await update.message.reply_text(
-            f"🎉 Промокод активирован! Начислено: +{fmt(promo['reward'])} TON 💎"
-        )
+history_data = load_json(HISTORY_FILE, {})
 
 
 def save_balances():
@@ -216,15 +140,49 @@ def save_stats():
 def save_bonus_times():
     save_json(BONUS_FILE, bonus_times)
 
+
+def save_promos():
+    save_json(PROMOS_FILE, promos)
+
+
+def save_promo_uses():
+    save_json(PROMO_USES_FILE, promo_uses)
+
+
+def save_history():
+    save_json(HISTORY_FILE, history_data)
+
+
+def add_history(user_id: str, action_type: str, amount: int, details: str = ""):
+    user_id = str(user_id)
+    if user_id not in history_data:
+        history_data[user_id] = []
+    history_data[user_id].append({
+        "type": action_type,
+        "amount": amount,
+        "details": details,
+        "timestamp": datetime.now(MSK_TZ).strftime("%d.%m.%Y %H:%M:%S")
+    })
+    history_data[user_id] = history_data[user_id][-100:]  # Храним последние 100 операций
+    save_history()
+
 # =========================================================
-# ПОЛЬЗОВАТЕЛИ И СТАТИСТИКА
+# ПОЛЬЗОВАТЕЛИ И СТАТИСТИКА С УПОМИНАНИЯМИ HTML
 # =========================================================
 
 def get_user_display_name(user) -> str:
-    if user.username:
-        return f"@{user.username}"
+    """Возвращает красивую кликабельную ссылку-упоминание на пользователя."""
     name = (user.first_name or "").strip()
-    return name if name else f"Игрок {user.id}"
+    if not name:
+        name = f"Игрок {user.id}"
+    name = name.replace("<", "&lt;").replace(">", "&gt;")
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
+
+
+def get_user_link(user_id: str, raw_name: str) -> str:
+    """Создаёт кликабельное упоминание по ID и сырому имени."""
+    safe_name = str(raw_name).replace("<", "&lt;").replace(">", "&gt;")
+    return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
 
 
 def get_user(user):
@@ -264,6 +222,7 @@ active_mines_games = {}
 last_user_bets = {}
 
 pending_duels = {}
+open_duels = {}
 active_duels = {}
 duel_id_counter = 1
 
@@ -274,7 +233,7 @@ active_treasure_games = {}
 waiting_for_custom_stars = {}
 
 # =========================================================
-# ФОНОВЫЙ СБРОС ТОПОВ В 00:00 ПО МСК
+# ФОНОВЫЙ СБРОС ТОПОВ В 00:00 ПО МСК И ТАЙМАУТЫ
 # =========================================================
 
 async def daily_reset_task():
@@ -297,6 +256,91 @@ async def daily_reset_task():
         except Exception as e:
             print(f"Ошибка в сбросе топов: {e}")
             await asyncio.sleep(60)
+
+
+async def monitor_timeouts_loop(application: Application):
+    """Каждые 5 секунд проверяет таймауты игр в Мины и Дуэлей."""
+    while True:
+        try:
+            await asyncio.sleep(5)
+            now = time.time()
+
+            # 1. Проверка таймаута в Минах (1 минута бездействия)
+            for uid, game in list(active_mines_games.items()):
+                if now - game.get("last_action", 0) > 60:
+                    chat_id = game["chat_id"]
+                    bet = game["bet"]
+                    opened_count = len(game["opened"])
+                    user_mention = get_user_link(uid, game.get("raw_name", "Игрок"))
+
+                    if opened_count == 0:
+                        # Если не открыли ни одной ячейки — просто возвращаем ставку
+                        balances[uid] = int(round(balances.get(uid, START_BALANCE))) + bet
+                        save_balances()
+                        add_history(uid, "Возврат (Мины)", bet, "Отмена по неактивности")
+                        try:
+                            await application.bot.send_message(
+                                chat_id=chat_id,
+                                text=f"⏰ {user_mention}, время ожидания хода в Минах вышло (1 мин). Игра отменена, ставка <b>{fmt(bet)} TON</b> полностью возвращена.",
+                                parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        # Если уже открыли кристаллы — принудительно забираем текущий выигрыш!
+                        mult = get_mines_multiplier(opened_count, game["mines_count"])
+                        win_amount = int(round(bet * mult))
+                        balances[uid] = int(round(balances.get(uid, START_BALANCE))) + win_amount
+                        save_balances()
+                        record_game_win(uid, win_amount)
+                        add_history(uid, "Доход (Мины)", win_amount, "Автовывод по таймауту")
+                        try:
+                            await application.bot.send_message(
+                                chat_id=chat_id,
+                                text=f"⏰ {user_mention}, время ожидания хода в Минах вышло (1 мин). Зафиксирован автоматический вывод: <b>+{fmt(win_amount)} TON 💎</b> (x{mult})",
+                                parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+
+                    active_mines_games.pop(uid, None)
+
+            # 2. Проверка таймаута личных дуэлей (1 минута без ответа)
+            for duel_id, duel in list(pending_duels.items()):
+                if now - duel["created_at"] > 60:
+                    chat_id = duel["chat_id"]
+                    pending_duels.pop(duel_id, None)
+                    try:
+                        await application.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"⏰ Время ожидания ответа на дуэль между {duel['challenger_name']} и {duel['opponent_name']} вышло. Предложение отменено.",
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+
+            # 3. Проверка таймаута открытых дуэлей "Кто дуэль" (1 минута)
+            for duel_id, duel in list(open_duels.items()):
+                if now - duel["created_at"] > 60:
+                    chat_id = duel["chat_id"]
+                    msg_id = duel.get("message_id")
+                    open_duels.pop(duel_id, None)
+                    if msg_id:
+                        try:
+                            await application.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                        except Exception:
+                            try:
+                                await application.bot.edit_message_text(
+                                    chat_id=chat_id,
+                                    message_id=msg_id,
+                                    text=f"⏰ Предложение дуэли от {duel['challenger_name']} на {fmt(duel['amount'])} TON отменено по таймауту.",
+                                    parse_mode="HTML"
+                                )
+                            except Exception:
+                                pass
+
+        except Exception as e:
+            print(f"Ошибка в мониторе таймаутов: {e}")
 
 # =========================================================
 # ЛОГИКА МИН
@@ -338,11 +382,15 @@ def build_mines_keyboard(game_data, game_over=False, won=False):
         mult = get_mines_multiplier(opened_count, game_data["mines_count"])
         win_amount = int(round(game_data["bet"] * mult))
 
-        if opened_count > 0:
+        # Если не открыли ни одной ячейки — показываем только "❌ Отменить игру"
+        if opened_count == 0:
+            keyboard.append([
+                InlineKeyboardButton("❌ Отменить игру", callback_data="mine_cancel")
+            ])
+        else:
+            # Если открыли хоть одну ячейку — убираем "Отмена" и показываем "Забрать деньги"
             cashout_text = f"💰 Забрать {fmt(win_amount)} TON (x{mult})"
             keyboard.append([InlineKeyboardButton(cashout_text, callback_data="mine_cashout")])
-        else:
-            keyboard.append([InlineKeyboardButton("🎯 Откройте ячейку", callback_data="mine_ignore")])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -419,6 +467,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Используй кнопки внизу или команды:\n"
         "• <b>игры</b> — список доступных игр\n"
         "• <b>команды</b> — справка по командам бота\n"
+        "• <b>история</b> — история ваших переводов и начислений\n"
         "• <b>донат</b> — пополнить баланс за Telegram Stars ⭐️",
         reply_markup=reply_markup,
         parse_mode="HTML"
@@ -435,7 +484,7 @@ async def show_commands_help(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = (
         "📜 <b>СПРАВКА ПО КОМАНДАМ БОТА:</b>\n\n"
         "🎡 <b>Рулетка:</b>\n"
-        "• <code>[сумма] [ставка]</code> — сделать ставку (например: <code>100 к</code> или <code>50 0-12</code>)\n"
+        "• <code>[сумма] [ставка]</code> — сделать ставку (например: <code>100 к</code>)\n"
         "• <b>го</b> — запустить рулетку (после ставки)\n"
         "• <b>отмена</b> — отменить свои ставки в текущем раунде\n"
         "• <b>ставки</b> — посмотреть список твоих сделанных ставок\n"
@@ -446,13 +495,15 @@ async def show_commands_help(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "• <code>мины [сумма]</code> — начать игру с 3 минами\n"
         "• <code>мины [сумма] [кол-во]</code> — игра с кастомным числом мин (до 24)\n\n"
         "🤠 <b>Дуэли:</b>\n"
-        "• <code>дуэль [сумма]</code> (ответом на сообщение оппонента) — вызвать игрока на дуэль (x2)\n\n"
+        "• <code>дуэль [сумма]</code> (ответом) — вызвать игрока на дуэль\n"
+        "• <code>кто дуэль [сумма]</code> — создать открытую дуэль для любого желающего в чате\n\n"
         "🏛 <b>Казна чата:</b>\n"
         "• <b>купить казну</b> — покупка казны владельцем чата (100 000 TON)\n"
         "• <code>пополнить казну [сумма]</code> — пополнение казны\n"
         "• <b>казна</b> — статус и баланс казны (+1 500 за приглашение)\n\n"
         "👤 <b>Прочее:</b>\n"
         "• <b>б</b> или <b>баланс</b> — узнать свой баланс\n"
+        "• <b>история</b> — твоя история переводов и начислений\n"
         "• <b>топ</b> — таблица лидеров по балансу и выигрышам\n"
         "• <code>дать [сумма]</code> (ответом) — передать валюту игроку\n"
         "• <b>донат</b> — пополнение за звезды ⭐️"
@@ -468,7 +519,7 @@ async def show_games_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎮 <b>ДОСТУПНЫЕ ИГРЫ В КАЗИНО:</b>\n\n"
         "1️⃣ <b>Рулетка</b>\n"
         "Классическая европейская рулетка (0-36). Ставки на цвета (к/ч), чёт/нечет, числа и диапазоны.\n"
-        "📌 <i>Команда:</i> <code>100 к</code> (или пакетные ставки: <code>100 к чёт 0-12</code>), затем <b>го</b>\n\n"
+        "📌 <i>Команда:</i> <code>100 к</code>, затем <b>го</b>\n\n"
         "2️⃣ <b>Клад 📦</b>\n"
         "Испытай удачу в 3 сундуках! В одном пусто, в другом возврат (x1), в третьем куш (x2).\n"
         "📌 <i>Команда:</i> <code>клад 500</code>\n\n"
@@ -477,7 +528,7 @@ async def show_games_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 <i>Команда:</i> <code>мины 200 3</code>\n\n"
         "4️⃣ <b>Дуэли 🤠</b>\n"
         "Постреляйся с реальным игроком один на один с коэффициентом x2!\n"
-        "📌 <i>Команда:</i> <code>дуэль 1000</code> (ответом на сообщение оппонента)"
+        "📌 <i>Команда:</i> <code>дуэль 1000</code> (ответом) или <code>кто дуэль 1000</code>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -522,6 +573,7 @@ async def handle_treasure_command(update: Update, context: ContextTypes.DEFAULT_
     # Списываем ставку
     balances[user_id] -= bet
     save_balances()
+    add_history(user_id, "Расход (Клад)", bet, "Инициация игры")
 
     # Генерируем результаты для 3 сундуков:
     # 0 - пусто (сгорает), 1 - возврат (x1), 2 - куш (x2)
@@ -569,7 +621,6 @@ async def treasure_callback_handler(query, user_id: str, box_idx: int):
 
     chosen_prize = prizes[box_idx]
 
-    # Раскрываем все сундуки для красоты
     icons = {0: "❌ (пусто)", 1: "🔙 (возврат x1)", 2: "💎 (куш x2)"}
     chest_results = [icons[p] for p in prizes]
 
@@ -583,22 +634,21 @@ async def treasure_callback_handler(query, user_id: str, box_idx: int):
     )
 
     if chosen_prize == 0:
-        # Пусто
         record_game_win(user_id, 0)
         result_text += f"💥 <b>Увы, здесь пусто!</b> Ставка сгорела.\n💸 Потеряно: <b>{fmt(bet)} TON</b>"
     elif chosen_prize == 1:
-        # Возврат x1
         win_amount = bet
         balances[user_id] = int(round(balances[user_id])) + win_amount
         save_balances()
         record_game_win(user_id, win_amount)
+        add_history(user_id, "Возврат (Клад)", win_amount, "Выбран x1")
         result_text += f"🔙 <b>Возврат ставки (x1)!</b>\n💳 На баланс возвращено: <b>{fmt(win_amount)} TON</b>"
     else:
-        # Куш x2
         win_amount = bet * 2
         balances[user_id] = int(round(balances[user_id])) + win_amount
         save_balances()
         record_game_win(user_id, win_amount)
+        add_history(user_id, "Доход (Клад)", win_amount, "Выбран x2")
         result_text += f"🎉 <b>КУШ! МЕГА-ПОБЕДА (x2)!</b>\n💰 Выигрыш: <b>+{fmt(win_amount)} TON 💎</b>"
 
     result_text += f"\n\n💰 Твой баланс: <b>{fmt(balances[user_id])} TON 💎</b>"
@@ -621,12 +671,41 @@ async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     user_id = get_user(user)
-    name = f"@{user.username}" if user.username else (user.first_name or "Игрок")
+    mention = get_user_display_name(user)
 
     await update.message.reply_text(
-        f"{name}\n💰 Твой баланс: <b>{fmt(balances[user_id])} TON 💎</b>",
+        f"{mention}\n💰 Твой баланс: <b>{fmt(balances[user_id])} TON 💎</b>",
         parse_mode="HTML"
     )
+
+# =========================================================
+# ИСТОРИЯ ОПЕРАЦИЙ
+# =========================================================
+
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    user_id = get_user(update.effective_user)
+    user_history = history_data.get(user_id, [])
+
+    if not user_history:
+        await update.message.reply_text("📋 Ваша история операций пока пуста.")
+        return
+
+    lines = ["📋 <b>ИСТОРИЯ ОПЕРАЦИЙ (Последние 15):</b>\n"]
+    for idx, item in enumerate(reversed(user_history[-15:]), start=1):
+        t_type = item.get("type", "Операция")
+        amount = item.get("amount", 0)
+        details = item.get("details", "")
+        time_str = item.get("timestamp", "")
+
+        sign = "+" if "Доход" in t_type or "Возврат" in t_type or "Бонус" in t_type else "-"
+        formatted_amount = f"<b>{sign}{fmt(amount)} TON 💎</b>"
+
+        lines.append(f"<code>{idx}.</code> 📅 {time_str} | {t_type}\n↳ {formatted_amount} ({details})\n")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 # =========================================================
 # СПИСОК СТАВОК ИГРОКА (КОМАНДА "СТАВКИ")
@@ -725,7 +804,7 @@ def render_top_wins() -> str:
     return "\n".join(lines)
 
 # =========================================================
-# ДУЭЛИ
+# ДУЭЛИ (ОДИНОЧНЫЕ И ОТКРЫТЫЕ)
 # =========================================================
 
 async def handle_duel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -740,7 +819,8 @@ async def handle_duel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not update.message.reply_to_message:
         await update.message.reply_text(
-            "❌ Используй команду ответом на сообщение игрока:\n<code>дуэль 500</code>",
+            "❌ Используй команду ответом на сообщение игрока:\n<code>дуэль 500</code>\n\n"
+            "Или напиши открытый вызов: <code>кто дуэль 500</code>",
             parse_mode="HTML"
         )
         return
@@ -825,7 +905,7 @@ async def handle_duel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"🤠 <b>{c_name}</b> бросает вызов <b>{o_name}</b>!\n"
         f"💰 Ставка каждого: <b>{fmt(amount)} TON 💎</b>\n"
         f"🏆 Победитель забирает банк: <b>{fmt(win_amount)} TON 💎</b> (x{int(DUEL_MULTIPLIER)})\n\n"
-        f"{o_name}, ты принимаешь дуэль?",
+        f"<i>У {o_name} есть 1 минута, чтобы принять вызов!</i>",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -834,6 +914,102 @@ async def handle_duel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def duel_callback_handler(query, data: str):
     user_id = str(query.from_user.id)
 
+    # ОТМЕНА ОТКРЫТОЙ ДУЭЛИ
+    if data.startswith("duel_decline_open_"):
+        duel_id = int(data.split("_")[3])
+        duel = open_duels.get(duel_id)
+        if not duel:
+            await query.answer("Дуэль уже недействительна.", show_alert=True)
+            return
+
+        if user_id != duel["challenger_id"]:
+            await query.answer("❌ Только создатель вызова может отменить его!", show_alert=True)
+            return
+
+        open_duels.pop(duel_id, None)
+        await query.edit_message_text(
+            f"❌ {duel['challenger_name']} отменил своё предложение дуэли.",
+            parse_mode="HTML"
+        )
+        await query.answer("Вызов отменён.")
+        return
+
+    # ПРИНЯТИЕ ОТКРЫТОЙ ДУЭЛИ (Кто дуэль)
+    if data.startswith("duel_accept_open_"):
+        duel_id = int(data.split("_")[3])
+        duel = open_duels.get(duel_id)
+        if not duel:
+            await query.answer("Дуэль не найдена или её время вышло.", show_alert=True)
+            return
+
+        opponent = query.from_user
+        o_id = get_user(opponent)
+
+        if o_id == duel["challenger_id"]:
+            await query.answer("❌ Вы не можете дуэлиться с самим собой!", show_alert=True)
+            return
+
+        amount = duel["amount"]
+        c_id = duel["challenger_id"]
+
+        if int(round(balances.get(c_id, 0))) < amount:
+            open_duels.pop(duel_id, None)
+            await query.edit_message_text(
+                f"❌ Дуэль отменена: у {duel['challenger_name']} не хватает средств!",
+                parse_mode="HTML"
+            )
+            return
+
+        if int(round(balances.get(o_id, 0))) < amount:
+            await query.answer(f"❌ Недостаточно средств! Нужно {fmt(amount)} TON.", show_alert=True)
+            return
+
+        balances[c_id] -= amount
+        balances[o_id] -= amount
+        save_balances()
+
+        # Запись расходов в историю
+        add_history(c_id, "Расход (Дуэль)", amount, f"Дуэль против {get_user_display_name(opponent)}")
+        add_history(o_id, "Расход (Дуэль)", amount, f"Дуэль против {duel['challenger_name']}")
+
+        open_duels.pop(duel_id, None)
+
+        o_name = get_user_display_name(opponent)
+        turn_id = random.choice([c_id, o_id])
+        turn_name = duel["challenger_name"] if turn_id == c_id else o_name
+
+        active_duels[duel_id] = {
+            "challenger_id": c_id,
+            "challenger_name": duel["challenger_name"],
+            "opponent_id": o_id,
+            "opponent_name": o_name,
+            "amount": amount,
+            "win_amount": duel["win_amount"],
+            "turn_id": turn_id,
+            "last_action_text": "Дуэлянты зарядили револьверы и встали к барьеру."
+        }
+
+        keyboard = [
+            [
+                InlineKeyboardButton("🔫 Выстрел", callback_data=f"duel_shoot_{duel_id}"),
+                InlineKeyboardButton("🏳 Отказаться", callback_data=f"duel_surrender_{duel_id}")
+            ]
+        ]
+
+        await query.edit_message_text(
+            f"⚔️ <b>ДУЭЛЬ НАЧАЛАСЬ!</b>\n\n"
+            f"🤠 {duel['challenger_name']} ⚡️ {o_name}\n"
+            f"💰 Ставка каждого: <b>{fmt(amount)} TON 💎</b>\n"
+            f"🏆 Победитель заберёт: <b>{fmt(duel['win_amount'])} TON 💎</b>\n\n"
+            f"📝 <i>Дуэлянты встали на позиции и взвели курки.</i>\n\n"
+            f"👉 Право первого выстрела за: <b>{turn_name}</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        await query.answer("Вы приняли дуэль!")
+        return
+
+    # ОТКЛОНЕНИЕ ЛИЧНОЙ ДУЭЛИ
     if data.startswith("duel_decline_"):
         duel_id = int(data.split("_")[2])
         duel = pending_duels.get(duel_id)
@@ -856,6 +1032,7 @@ async def duel_callback_handler(query, data: str):
         await query.answer("Вызов отклонён.")
         return
 
+    # ПРИНЯТИЕ ЛИЧНОЙ ДУЭЛИ
     if data.startswith("duel_accept_"):
         duel_id = int(data.split("_")[2])
         duel = pending_duels.get(duel_id)
@@ -890,6 +1067,11 @@ async def duel_callback_handler(query, data: str):
         balances[c_id] -= amount
         balances[o_id] -= amount
         save_balances()
+
+        # История транзакций
+        add_history(c_id, "Расход (Дуэль)", amount, f"Дуэль против {duel['opponent_name']}")
+        add_history(o_id, "Расход (Дуэль)", amount, f"Дуэль против {duel['challenger_name']}")
+
         pending_duels.pop(duel_id, None)
 
         turn_id = random.choice([c_id, o_id])
@@ -909,7 +1091,7 @@ async def duel_callback_handler(query, data: str):
         keyboard = [
             [
                 InlineKeyboardButton("🔫 Выстрел", callback_data=f"duel_shoot_{duel_id}"),
-                InlineKeyboardButton("🏳 Отказаться от дуэли", callback_data=f"duel_surrender_{duel_id}")
+                InlineKeyboardButton("🏳 Отказаться", callback_data=f"duel_surrender_{duel_id}")
             ]
         ]
 
@@ -917,7 +1099,7 @@ async def duel_callback_handler(query, data: str):
             f"⚔️ <b>ДУЭЛЬ ПРИНЯТА И НАЧАЛАСЬ!</b>\n\n"
             f"🤠 {duel['challenger_name']} ⚡️ {duel['opponent_name']}\n"
             f"💰 Ставка каждого: <b>{fmt(amount)} TON 💎</b>\n"
-            f"🏆 Победитель заберёт: <b>{fmt(duel['win_amount'])} TON 💎</b> (x{int(DUEL_MULTIPLIER)})\n\n"
+            f"🏆 Победитель заберёт: <b>{fmt(duel['win_amount'])} TON 💎</b>\n\n"
             f"📝 <i>Дуэлянты встали на позиции и взвели курки.</i>\n\n"
             f"👉 Право первого выстрела за: <b>{turn_name}</b>",
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -926,6 +1108,7 @@ async def duel_callback_handler(query, data: str):
         await query.answer("Вы приняли дуэль!")
         return
 
+    # КЛИК: ВЫСТРЕЛ
     if data.startswith("duel_shoot_"):
         duel_id = int(data.split("_")[2])
         duel = active_duels.get(duel_id)
@@ -956,6 +1139,7 @@ async def duel_callback_handler(query, data: str):
             save_balances()
 
             record_game_win(user_id, win_amount)
+            add_history(user_id, "Доход (Дуэль)", win_amount, "Победа в перестрелке")
             active_duels.pop(duel_id, None)
 
             await query.edit_message_text(
@@ -963,7 +1147,7 @@ async def duel_callback_handler(query, data: str):
                 f"🤠 <b>{shooter_name}</b> нажимает на спуск...\n"
                 f"💥 <b>БАХ! ТОЧНОЕ ПОПАДАНИЕ!</b> Игрок <b>{target_name}</b> сражён наповал!\n\n"
                 f"🏆 Победитель: <b>{shooter_name}</b>\n"
-                f"🎉 Награда: <b>+{fmt(win_amount)} TON 💎</b> (x{int(DUEL_MULTIPLIER)})\n"
+                f"🎉 Награда: <b>+{fmt(win_amount)} TON 💎</b>\n"
                 f"💰 Баланс победителя: <b>{fmt(balances[user_id])} TON 💎</b>",
                 parse_mode="HTML"
             )
@@ -984,7 +1168,7 @@ async def duel_callback_handler(query, data: str):
         keyboard = [
             [
                 InlineKeyboardButton("🔫 Выстрел", callback_data=f"duel_shoot_{duel_id}"),
-                InlineKeyboardButton("🏳 Отказаться от дуэли", callback_data=f"duel_surrender_{duel_id}")
+                InlineKeyboardButton("🏳 Отказаться", callback_data=f"duel_surrender_{duel_id}")
             ]
         ]
 
@@ -1001,6 +1185,7 @@ async def duel_callback_handler(query, data: str):
         await query.answer("Осечка/Промах! Переход хода.")
         return
 
+    # КЛИК: СДАЧА
     if data.startswith("duel_surrender_"):
         duel_id = int(data.split("_")[2])
         duel = active_duels.get(duel_id)
@@ -1023,18 +1208,19 @@ async def duel_callback_handler(query, data: str):
         balances[winner_id] = int(round(balances[winner_id])) + win_amount
         save_balances()
         record_game_win(winner_id, win_amount)
+        add_history(winner_id, "Доход (Дуэль)", win_amount, f"Оппонент {surrendered_name} сдался")
         active_duels.pop(duel_id, None)
 
         await query.edit_message_text(
             f"🏳 <b>ДУЭЛЬ ЗАВЕРШЕНА СДАЧЕЙ!</b>\n\n"
-            f"🤠 Игрок <b>{surrendered_name}</b> испугался и отказался от продолжения дуэли!\n"
-            f"💸 Его ставка <b>{fmt(duel['amount'])} TON</b> безвозвратно потеряна.\n\n"
+            f"🤠 Игрок <b>{surrendered_name}</b> испугался и сдался!\n"
+            f"💸 Его ставка <b>{fmt(duel['amount'])} TON</b> потеряна.\n\n"
             f"🏆 Победитель: <b>{winner_name}</b>\n"
-            f"🎉 Получает весь банк: <b>+{fmt(win_amount)} TON 💎</b> (x{int(DUEL_MULTIPLIER)})\n"
+            f"🎉 Получает весь банк: <b>+{fmt(win_amount)} TON 💎</b>\n"
             f"💰 Новый баланс победителя: <b>{fmt(balances[winner_id])} TON 💎</b>",
             parse_mode="HTML"
         )
-        await query.answer("Вы отказались от дуэли 🏳")
+        await query.answer("Вы сдались 🏳")
         return
 
 # =========================================================
@@ -1042,7 +1228,7 @@ async def duel_callback_handler(query, data: str):
 # Курс: 1 звезда ⭐️ = 3 000 TON
 # =========================================================
 
-STARS_EXCHANGE_RATE = 3_000  # 1 звезда = 3 000 TON (или измени по своему усмотрению)
+STARS_EXCHANGE_RATE = 3_000  # 1 звезда = 3 000 TON
 
 async def show_donate_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
@@ -1127,7 +1313,6 @@ async def create_stars_invoice(message, context: ContextTypes.DEFAULT_TYPE, star
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
-    # Подтверждаем платеж перед списанием
     await query.answer(ok=True)
 
 
@@ -1136,10 +1321,10 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
     stars_paid = payment.total_amount
     user_id = str(update.effective_user.id)
 
-    # Автоматическая выдача валюты
     ton_reward = stars_paid * STARS_EXCHANGE_RATE
     balances[user_id] = int(round(balances.get(user_id, START_BALANCE))) + ton_reward
     save_balances()
+    add_history(user_id, "Доход (Донат)", ton_reward, f"Покупка {stars_paid} звезд ⭐️")
 
     await update.message.reply_text(
         f"✅ <b>ОПЛАТА УСПЕШНО ПРОШЛА!</b>\n\n"
@@ -1196,6 +1381,7 @@ async def buy_treasury(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     balances[user_id] -= TREASURY_COST
     save_balances()
+    add_history(user_id, "Расход (Казна)", TREASURY_COST, "Покупка казны")
 
     treasuries[chat_key] = {
         "balance": 0,
@@ -1248,6 +1434,7 @@ async def deposit_treasury(update: Update, amount: int):
 
     save_balances()
     save_treasuries()
+    add_history(user_id, "Расход (Казна)", amount, f"Пополнение казны чата {update.effective_chat.title}")
 
     name = get_user_display_name(user)
     await update.message.reply_text(
@@ -1325,6 +1512,7 @@ async def chat_member_joined_handler(update: Update, context: ContextTypes.DEFAU
 
     save_balances()
     save_treasuries()
+    add_history(inviter_id, "Доход (Приглашение)", paid, f"Приглашение {len(new_users)} участников в группу")
 
     name = get_user_display_name(inviter)
     await update.message.reply_text(
@@ -1383,9 +1571,10 @@ async def roulette_batch_bets(update: Update, amount: int, valid_bets: list):
 
     balances[user_id] -= total_amount
     save_balances()
+    add_history(user_id, "Расход (Рулетка)", total_amount, f"Ставок поставлено: {len(valid_bets)}")
 
     raw_user_name = user.first_name or f"Игрок {user.id}"
-    username_tag = f"@{user.username}" if user.username else raw_user_name
+    username_tag = get_user_link(user_id, raw_user_name)
 
     placed_lines = []
     for bet_str, (numbers, coefficient, bet_name) in valid_bets:
@@ -1399,7 +1588,7 @@ async def roulette_batch_bets(update: Update, amount: int, valid_bets: list):
             "coefficient": coefficient,
             "raw_bet": bet_str
         })
-        placed_lines.append(f"{raw_user_name} — {fmt(amount)} на {bet_name}")
+        placed_lines.append(f"{username_tag} — {fmt(amount)} на {bet_name}")
 
     placed_text = "\n".join(placed_lines[:15])
     if len(placed_lines) > 15:
@@ -1438,6 +1627,7 @@ async def roulette_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     refund_sum = sum(b["amount"] for b in user_bets)
     balances[user_id] += refund_sum
     save_balances()
+    add_history(user_id, "Возврат (Рулетка)", refund_sum, "Отмена ставок")
 
     pending_bets[chat_id] = [b for b in bets if b["user_id"] != user_id]
 
@@ -1449,7 +1639,8 @@ async def roulette_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"❌ Ставки {username} отменены!\n"
         f"💳 На баланс возвращено: {fmt(refund_sum)} TON 💎\n"
-        f"💰 Текущий баланс: {fmt(balances[user_id])} TON 💎"
+        f"💰 Текущий баланс: {fmt(balances[user_id])} TON 💎",
+        parse_mode="HTML"
     )
 
 
@@ -1572,7 +1763,7 @@ async def roulette_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
 
         for bet_data in bets:
-            p_name = bet_data.get("raw_name") or bet_data["username"]
+            p_name = get_user_link(bet_data["user_id"], bet_data.get("raw_name") or "Игрок")
             lines.append(f"{p_name} — {fmt(bet_data['amount'])} на {bet_data['bet_name']}")
 
         lines.append("———————————————")
@@ -1586,11 +1777,12 @@ async def roulette_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if result in bet_data["numbers"]:
                 win = int(round(amount * bet_data["coefficient"]))
                 balances[b_uid] = int(round(balances[b_uid])) + win
-                p_name = bet_data.get("raw_name") or bet_data["username"]
+                p_name = get_user_link(b_uid, bet_data.get("raw_name") or "Игрок")
                 winning_bets_lines.append(
                     f"🎉 {p_name} — выиграла ставка <b>{bet_data['bet_name']}</b> (+{fmt(win)} TON)"
                 )
                 record_game_win(b_uid, win)
+                add_history(b_uid, "Доход (Рулетка)", win, f"Ставка на {bet_data['bet_name']} зашла")
 
         save_balances()
 
@@ -1656,10 +1848,11 @@ async def roulette_callback(query, user_id, chat_id, double=False):
 
     balances[user_id] -= total_needed
     save_balances()
+    add_history(user_id, "Расход (Рулетка)", total_needed, "Повтор ставок")
 
     user = query.from_user
     raw_user_name = user.first_name or f"Игрок {user.id}"
-    username_tag = f"@{user.username}" if user.username else raw_user_name
+    username_tag = get_user_link(user_id, raw_user_name)
 
     placed_lines = []
     for s_bet in saved_bets:
@@ -1678,7 +1871,7 @@ async def roulette_callback(query, user_id, chat_id, double=False):
                 "coefficient": coefficient,
                 "raw_bet": bet_str
             })
-            placed_lines.append(f"{raw_user_name} — {fmt(amount)} на {bet_name}")
+            placed_lines.append(f"{username_tag} — {fmt(amount)} на {bet_name}")
 
     action_word = "удвоил" if double else "повторил"
     placed_text = "\n".join(placed_lines[:15])
@@ -1686,7 +1879,7 @@ async def roulette_callback(query, user_id, chat_id, double=False):
         placed_text += f"\n... и ещё {len(placed_lines) - 15} ставок"
 
     await query.message.reply_text(
-        f"✅ <b>{raw_user_name} {action_word} ставки!</b>\n\n"
+        f"✅ <b>{username_tag} {action_word} ставки!</b>\n\n"
         f"{placed_text}\n\n"
         f"💰 Списано: {fmt(total_needed)} TON\n"
         f"⏳ Запуск через {BET_WAIT_SECONDS} секунд.",
@@ -1715,7 +1908,31 @@ async def mines_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     game_data = active_mines_games[user_id]
+    game_data["last_action"] = time.time()  # Сброс таймаута при активности
 
+    # КЛИК: ОТМЕНА ИГРЫ
+    if data == "mine_cancel":
+        opened_count = len(game_data["opened"])
+        if opened_count > 0:
+            await query.answer("Нельзя отменить начатую игру!", show_alert=True)
+            return
+
+        # Возвращаем ставку
+        bet = game_data["bet"]
+        balances[user_id] = int(round(balances[user_id])) + bet
+        save_balances()
+        add_history(user_id, "Возврат (Мины)", bet, "Отмена игры игроком")
+
+        del active_mines_games[user_id]
+
+        await query.edit_message_text(
+            f"❌ Игра в Мины отменена.\n💰 На баланс возвращено: <b>{fmt(bet)} TON</b>\n💳 Баланс: <b>{fmt(balances[user_id])} TON 💎</b>",
+            parse_mode="HTML"
+        )
+        await query.answer("Игра отменена, ставка возвращена!")
+        return
+
+    # КЛИК: ЗАБРАТЬ ДЕНЬГИ
     if data == "mine_cashout":
         opened_count = len(game_data["opened"])
         if opened_count == 0:
@@ -1729,6 +1946,7 @@ async def mines_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_balances()
 
         record_game_win(user_id, win_amount)
+        add_history(user_id, "Доход (Мины)", win_amount, f"Забрал кэш на x{mult}")
 
         reply_markup = build_mines_keyboard(game_data, game_over=True, won=True)
 
@@ -1744,6 +1962,7 @@ async def mines_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Выигрыш зачислен!")
         return
 
+    # КЛИК ПО ЯЧЕЙКЕ ПОЛЯ
     if data.startswith("mine_click_"):
         idx = int(data.split("_")[2])
 
@@ -1778,6 +1997,7 @@ async def mines_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_balances()
 
             record_game_win(user_id, win_amount)
+            add_history(user_id, "Доход (Мины)", win_amount, "Полная зачистка поля!")
 
             reply_markup = build_mines_keyboard(game_data, game_over=True, won=True)
 
@@ -1932,6 +2152,10 @@ async def transfer_coins(update: Update, amount: int):
     balances[recipient_id] += amount
     save_balances()
 
+    # Запись транзакции в историю обоих участников
+    add_history(sender_id, "Расход (Перевод)", amount, f"Перевод игроку {get_user_display_name(recipient)}")
+    add_history(recipient_id, "Доход (Перевод)", amount, f"Получено от {get_user_display_name(sender)}")
+
     await update.message.reply_text(
         f"💸 Передано: <b>{fmt(amount)} TON 💎</b>\n"
         f"👤 Получатель: {get_user_display_name(recipient)}",
@@ -1960,6 +2184,7 @@ async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global duel_id_counter
     if not update.message or not update.message.text:
         return
 
@@ -1997,6 +2222,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_balance(update, context)
         return
 
+    if lower in {"история", "/история"}:
+        await show_history(update, context)
+        return
+
     if lower in {"ставки", "мои ставки", "/ставки"}:
         await show_my_bets(update, context)
         return
@@ -2015,6 +2244,71 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if lower.startswith("клад"):
         await handle_treasure_command(update, context)
+        return
+
+    # ОТКРЫТЫЙ ВЫЗОВ НА ДУЭЛЬ (Кто дуэль сумма)
+    if lower.startswith("кто дуэль"):
+        parts = text.split()
+        if len(parts) < 3:
+            await update.message.reply_text(
+                "❌ Укажите ставку открытой дуэли:\nПример: <code>Кто дуэль 5000</code>",
+                parse_mode="HTML"
+            )
+            return
+
+        try:
+            amount = int(parts[2].replace(" ", ""))
+        except ValueError:
+            await update.message.reply_text("❌ Ставка должна быть целым числом.")
+            return
+
+        if amount <= 0:
+            await update.message.reply_text("❌ Ставка должна быть больше 0.")
+            return
+
+        challenger = update.effective_user
+        c_id = get_user(challenger)
+        c_bal = int(round(balances[c_id]))
+
+        if c_bal < amount:
+            await update.message.reply_text(
+                f"❌ У вас недостаточно TON для этой дуэли!\nВаш баланс: <b>{fmt(c_bal)} TON 💎</b>",
+                parse_mode="HTML"
+            )
+            return
+
+        duel_id = duel_id_counter
+        duel_id_counter += 1
+
+        win_amount = int(round(amount * DUEL_MULTIPLIER))
+        c_name = get_user_display_name(challenger)
+
+        keyboard = [
+            [
+                InlineKeyboardButton("🎯 Принять вызов", callback_data=f"duel_accept_open_{duel_id}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"duel_decline_open_{duel_id}")
+            ]
+        ]
+
+        msg = await update.message.reply_text(
+            f"⚔️ <b>ОТКРЫТЫЙ ВЫЗОВ НА ДУЭЛЬ!</b>\n\n"
+            f"🤠 {c_name} предлагает сыграть в дуэль всем желающим!\n"
+            f"💰 Ставка: <b>{fmt(amount)} TON 💎</b>\n"
+            f"🏆 Победитель заберёт: <b>{fmt(win_amount)} TON 💎</b> (x{int(DUEL_MULTIPLIER)})\n\n"
+            f"👇 Нажмите кнопку ниже, чтобы принять вызов (у вас есть 1 минута):",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+
+        open_duels[duel_id] = {
+            "chat_id": update.effective_chat.id,
+            "challenger_id": c_id,
+            "challenger_name": c_name,
+            "amount": amount,
+            "win_amount": win_amount,
+            "created_at": time.time(),
+            "message_id": msg.message_id
+        }
         return
 
     if lower.startswith("дуэль") or lower.startswith("/дуэль"):
@@ -2101,6 +2395,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         balances[user_id_obj] -= bet
         save_balances()
+        add_history(user_id_obj, "Расход (Мины)", bet, "Инициация игры")
 
         mine_positions = set(random.sample(range(25), mines_count))
 
@@ -2110,7 +2405,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "mines": mine_positions,
             "opened": set(),
             "chat_id": update.effective_chat.id,
-            "user_id": user_id_obj
+            "user_id": user_id_obj,
+            "raw_name": update.effective_user.first_name or f"Игрок {user_id_obj}",
+            "last_action": time.time()  # Фиксируем время создания для таймаута
         }
 
         active_mines_games[user_id_obj] = game_data
@@ -2119,14 +2416,86 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"💣 <b>ИГРА В МИНЫ</b>\n\n"
             f"💰 Ставка: <b>{fmt(bet)} TON 💎</b> | Мин: {game_data['mines_count']}\n"
-            f"💎 Выберите ячейку:",
+            f"💎 Выберите ячейку (или нажмите ❌ Отменить игру):",
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
         return
 
+    # СОЗДАНИЕ ПРОМОКОДА: Создать промокод #promo 10000 20
+    parts = text.split()
+    if len(parts) == 5 and parts[0].lower() == "создать" and parts[1].lower() == "промокод":
+        if update.effective_user.id != OWNER_ID:
+            await update.message.reply_text("❌ Только владелец бота может генерировать промокоды.")
+            return
+
+        code = parts[2].lstrip("#").lower()
+
+        try:
+            reward = int(parts[3].replace(" ", ""))
+            limit = int(parts[4].replace(" ", ""))
+        except ValueError:
+            await update.message.reply_text("Формат: Создать промокод #код сумма количество")
+            return
+
+        if not code or reward <= 0 or limit <= 0:
+            await update.message.reply_text("❌ Сумма и количество должны быть больше 0.")
+            return
+
+        if code in promos:
+            await update.message.reply_text("❌ Промокод с таким названием уже активен.")
+            return
+
+        promos[code] = {"reward": reward, "limit": limit, "used": 0}
+        promo_uses[code] = []
+        save_promos()
+        save_promo_uses()
+
+        await update.message.reply_text(
+            f"✅ <b>Промокод #{code} успешно создан!</b>\n\n"
+            f"🎁 Награда: <b>+{fmt(reward)} TON</b>\n"
+            f"👥 Макс. активаций: <b>{limit}</b>",
+            parse_mode="HTML"
+        )
+        return
+
+    # АКТИВАЦИЯ ПРОМОКОДА: #promo
+    if len(parts) == 1 and parts[0].startswith("#"):
+        code = parts[0].lstrip("#").lower()
+        user_id_p = get_user(update.effective_user)
+
+        promo = promos.get(code)
+        if not promo:
+            await update.message.reply_text("❌ Такого промокода не существует.")
+            return
+
+        used_by = promo_uses.setdefault(code, [])
+        if user_id_p in used_by:
+            await update.message.reply_text("❌ Вы уже активировали этот промокод!")
+            return
+
+        if promo["used"] >= promo["limit"]:
+            await update.message.reply_text("❌ Данный промокод больше не действителен (лимит превышен).")
+            return
+
+        balances[user_id_p] = int(balances.get(user_id_p, START_BALANCE)) + int(promo["reward"])
+        promo["used"] += 1
+        used_by.append(user_id_p)
+
+        save_balances()
+        save_promos()
+        save_promo_uses()
+        add_history(user_id_p, "Доход (Промокод)", promo["reward"], f"Активация #{code}")
+
+        await update.message.reply_text(
+            f"🎉 <b>Успешно!</b>\n"
+            f"Начислено: <b>+{fmt(promo['reward'])} TON 💎</b>\n"
+            f"💰 Твой баланс: <b>{fmt(balances[user_id_p])} TON 💎</b>",
+            parse_mode="HTML"
+        )
+        return
+
     # Передача монет
-    parts = lower.split()
     if len(parts) == 2 and parts[0] == "дать":
         try:
             amount = int(parts[1].replace(" ", ""))
@@ -2189,6 +2558,7 @@ async def bonus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bonus_times[user_id] = now
     save_balances()
     save_bonus_times()
+    add_history(user_id, "Бонус", bonus, "Ежедневный бонус")
 
     await update.message.reply_text(
         f"🎁 Бонус начислен: <b>+{fmt(bonus)} TON 💎</b>\n"
@@ -2203,6 +2573,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     asyncio.create_task(daily_reset_task())
+    asyncio.create_task(monitor_timeouts_loop(application))
 
 
 def main():
@@ -2210,18 +2581,12 @@ def main():
         print("❌ Сначала вставь токен бота в переменную TOKEN.")
         return
 
-   
     application = (
         Application.builder()
         .token(TOKEN)
         .post_init(post_init)
         .build()
     )
-
-    application.add_handler(
-    MessageHandler(filters.TEXT & ~filters.COMMAND, promo_handler),
-    group=1
-)
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(general_callback_handler))
