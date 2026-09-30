@@ -27,7 +27,7 @@ from telegram.ext import (
 # НАСТРОЙКИ
 # =========================================================
 
-TOKEN = ""
+TOKEN = "8725490149:AAEt-HQdNMrAACe8m4-Ne6TerVQRWYroqSc"
 PROVIDER_TOKEN = "" # Токен платежного провайдера для Telegram Stars (оставьте пустым или укажите от BotFather)
 
 START_BALANCE = 1000
